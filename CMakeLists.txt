@@ -1,0 +1,6 @@
+cmake_minimum_required(VERSION 3.15)
+project(guess_tcp C)
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+add_executable(guess_server src/server.c)
+add_executable(guess_client src/client.c)
