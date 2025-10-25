@@ -1,20 +1,19 @@
-#define _POSIX_C_SOURCE 200112L
+#include <getopt.h>
+#define _WIN32_WINNT 0x0600
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
-#include <unistd.h>
-#include <arpa/inet.h>
-#include <netdb.h>
-#include <sys/socket.h>
+#include <winsock2.h>
+#include <ws2tcpip.h>
 
-static void die(const char* msg){ perror(msg); exit(EXIT_FAILURE); }
+#pragma comment(lib, "Ws2_32.lib")
 
-static int read_line_sock(int fd, char *buf, size_t cap){
+static int read_line_sock(SOCKET fd, char *buf, size_t cap){
     size_t n = 0;
     while(n + 1 < cap){
-        char c; ssize_t r = recv(fd, &c, 1, 0);
-        if(r == 0) return 0; if(r < 0){ if(errno==EINTR) continue; return -1; }
+        char c; int r = recv(fd, &c, 1, 0);
+        if(r == 0) return 0; if(r < 0){ if(WSAGetLastError()==WSAEINTR) continue; return -1; }
         if(c == '\n'){ buf[n]=0; return (int)n; }
         buf[n++]=c;
     }
@@ -30,13 +29,24 @@ int main(int argc, char **argv){
     }
     if(!addr || !port){ fprintf(stderr,"Usage: %s -a ADDR -p PORT\n", argv[0]); return 2; }
 
-    struct addrinfo hints={0}, *res=NULL;
-    hints.ai_family=AF_INET; hints.ai_socktype=SOCK_STREAM;
-    if(getaddrinfo(addr, port, &hints, &res)!=0) die("getaddrinfo");
+    WSADATA wsa;
+    if(WSAStartup(MAKEWORD(2,2), &wsa) != 0){
+        fprintf(stderr,"WSAStartup failed: %d\n", WSAGetLastError());
+        return 1;
+    }
 
-    int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-    if(fd<0) die("socket");
-    if(connect(fd, res->ai_addr, res->ai_addrlen)<0) die("connect");
+    struct addrinfo hints, *res=NULL;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family=AF_INET; hints.ai_socktype=SOCK_STREAM;
+
+    int gi = getaddrinfo(addr, port, &hints, &res);
+    if(gi != 0){ fprintf(stderr,"getaddrinfo: %s\n", gai_strerrorA(gi)); WSACleanup(); return 1; }
+
+    SOCKET fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+    if(fd == INVALID_SOCKET){ fprintf(stderr,"socket: %d\n", WSAGetLastError()); freeaddrinfo(res); WSACleanup(); return 1; }
+    if(connect(fd, res->ai_addr, (int)res->ai_addrlen) == SOCKET_ERROR){
+        fprintf(stderr,"connect: %d\n", WSAGetLastError()); freeaddrinfo(res); closesocket(fd); WSACleanup(); return 1;
+    }
     freeaddrinfo(res);
 
     char buf[128];
@@ -50,7 +60,7 @@ int main(int argc, char **argv){
         if(strcmp(buf,"quit")==0 || strcmp(buf,"exit")==0) break;
 
         char out[128]; snprintf(out, sizeof(out), "%s\n", buf);
-        if(send(fd, out, strlen(out), 0) < 0){ perror("send"); break; }
+        if(send(fd, out, (int)strlen(out), 0) < 0){ fprintf(stderr,"send: %d\n", WSAGetLastError()); break; }
 
         int rr = read_line_sock(fd, buf, sizeof(buf));
         if(rr<=0){ printf("disconnected\n"); break; }
@@ -61,6 +71,7 @@ int main(int argc, char **argv){
             if(rr2>0) printf("server: %s\n", buf);
         }
     }
-    close(fd);
+    closesocket(fd);
+    WSACleanup();
     return 0;
 }
